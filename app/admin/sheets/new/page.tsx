@@ -47,12 +47,18 @@ export default function NewSheetPage() {
     maxFiles: 1,
   })
 
-  function handleThumbnailChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]
+  const onThumbnailDrop = useCallback((accepted: File[]) => {
+    const f = accepted[0]
     if (!f) return
     setThumbnail(f)
     setThumbnailPreview(URL.createObjectURL(f))
-  }
+  }, [])
+
+  const { getRootProps: getThumbRootProps, getInputProps: getThumbInputProps, isDragActive: isThumbDragActive } = useDropzone({
+    onDrop: onThumbnailDrop,
+    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] },
+    maxFiles: 1,
+  })
 
   function toggleCategory(id: string) {
     setSelectedCategories(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])
@@ -125,25 +131,34 @@ export default function NewSheetPage() {
         {/* Thumbnail */}
         <div className="space-y-1.5">
           <Label>Preview Image (optional)</Label>
-          <p className="text-xs text-gray-400">This appears as the card thumbnail on the home page. JPG or PNG.</p>
-          <div className="flex items-center gap-4 mt-1">
-            {thumbnailPreview ? (
-              <div className="relative">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={thumbnailPreview} alt="Thumbnail preview" className="h-24 w-20 object-cover rounded-lg border" />
-                <button type="button" onClick={() => { setThumbnail(null); setThumbnailPreview(null) }}
-                  className="absolute -top-2 -right-2 bg-white rounded-full shadow p-0.5 text-gray-400 hover:text-red-500">
-                  <X className="h-3.5 w-3.5" />
-                </button>
+          <p className="text-xs text-gray-400">Appears as the card thumbnail. JPG or PNG.</p>
+          {thumbnailPreview ? (
+            <div className="relative inline-block mt-1">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={thumbnailPreview} alt="Thumbnail preview" className="h-40 w-auto rounded-xl border object-cover" />
+              <button
+                type="button"
+                onClick={() => { setThumbnail(null); setThumbnailPreview(null) }}
+                className="absolute -top-2 -right-2 bg-white rounded-full shadow p-0.5 text-gray-400 hover:text-red-500"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div
+              {...getThumbRootProps()}
+              className={`mt-1 border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
+                isThumbDragActive ? 'border-[#1E5A96] bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <input {...getThumbInputProps()} />
+              <div className="flex flex-col items-center gap-1.5 text-gray-400">
+                <Image className="h-8 w-8 text-gray-300" />
+                <p className="text-sm">{isThumbDragActive ? 'Drop image here' : 'Drag & drop an image, or click to select'}</p>
+                <p className="text-xs text-gray-300">JPG, PNG, WEBP</p>
               </div>
-            ) : (
-              <label className="flex flex-col items-center justify-center h-24 w-20 border-2 border-dashed rounded-lg cursor-pointer text-gray-300 hover:border-gray-400 hover:text-gray-400 transition-colors">
-                <Image className="h-6 w-6 mb-1" />
-                <span className="text-xs">Upload</span>
-                <input type="file" accept="image/*" className="sr-only" onChange={handleThumbnailChange} />
-              </label>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Title */}

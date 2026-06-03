@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { ContactRegionPicker } from '@/components/sheets/contact-region-picker'
-import { ChevronLeft, Save, UserPlus, UserMinus, Eye, Trash2 } from 'lucide-react'
+import { ChevronLeft, Save, UserPlus, UserMinus, Eye, Trash2, FolderDown } from 'lucide-react'
 import type { Category, Profile, SellSheet, ContactBox } from '@/types/database'
 
 export default function EditSheetPage() {
@@ -32,6 +32,7 @@ export default function EditSheetPage() {
   const [pdfSignedUrl, setPdfSignedUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [batchDownloading, setBatchDownloading] = useState(false)
 
   const load = useCallback(async () => {
     const [sheetRes, catsRes] = await Promise.all([
@@ -76,6 +77,26 @@ export default function EditSheetPage() {
     if (!res.ok) { toast({ title: 'Error updating access', variant: 'destructive' }); return }
     setAccessUserIds(prev => grant ? [...prev, userId] : prev.filter(u => u !== userId))
     toast({ title: grant ? 'Access granted' : 'Access removed' })
+  }
+
+  async function handleBatchDownload() {
+    setBatchDownloading(true)
+    const res = await fetch(`/api/admin/sheets/${id}/batch-download`)
+    if (!res.ok) {
+      const data = await res.json()
+      toast({ title: 'Download failed', description: data.error, variant: 'destructive' })
+      setBatchDownloading(false)
+      return
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sheet?.title?.replace(/[^a-z0-9]/gi, '_') || 'sell-sheet'}_All_Salespeople.zip`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 100)
+    setBatchDownloading(false)
+    toast({ title: 'ZIP downloaded!', description: `${accessUserIds.length} PDF${accessUserIds.length !== 1 ? 's' : ''} generated` })
   }
 
   async function handleDelete() {
@@ -150,10 +171,22 @@ export default function EditSheetPage() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button onClick={handleSave} disabled={saving} className="gap-2">
               <Save className="h-4 w-4" />
               {saving ? 'Saving…' : 'Save Changes'}
+            </Button>
+            <Button
+              onClick={handleBatchDownload}
+              disabled={batchDownloading || accessUserIds.length === 0}
+              variant="secondary"
+              className="gap-2"
+              title={accessUserIds.length === 0 ? 'Grant access to at least one salesperson first' : ''}
+            >
+              <FolderDown className="h-4 w-4" />
+              {batchDownloading
+                ? 'Generating ZIPs…'
+                : `Download All (${accessUserIds.length} salesperson${accessUserIds.length !== 1 ? 's' : ''})`}
             </Button>
             <Button onClick={handleDelete} variant="destructive" size="sm" className="gap-2">
               <Trash2 className="h-4 w-4" />

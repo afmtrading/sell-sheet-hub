@@ -48,6 +48,30 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ user: newUser.user })
 }
 
+// DELETE — permanently remove a user
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient()
+  const admin = createAdminClient()
+
+  const { data: { user: me } } = await supabase.auth.getUser()
+  if (!me) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: myProfile } = await admin.from('profiles').select('role').eq('id', me.id).single()
+  if (myProfile?.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  const { id } = await request.json()
+  if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 })
+
+  // Prevent self-deletion
+  if (id === me.id) return NextResponse.json({ error: 'You cannot delete your own account' }, { status: 400 })
+
+  // Delete from Supabase Auth — cascades to profiles via foreign key
+  const { error: deleteError } = await admin.auth.admin.deleteUser(id)
+  if (deleteError) return NextResponse.json({ error: deleteError.message }, { status: 500 })
+
+  return NextResponse.json({ ok: true })
+}
+
 // PATCH — update user profile
 export async function PATCH(request: NextRequest) {
   const { error, status, admin } = await verifyAdmin()

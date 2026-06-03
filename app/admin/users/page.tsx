@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, ToggleLeft, ToggleRight, Users, Settings } from 'lucide-react'
+import { Plus, ToggleLeft, ToggleRight, Users, Settings, Trash2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { Profile } from '@/types/database'
 import Link from 'next/link'
@@ -58,6 +58,19 @@ export default function AdminUsersPage() {
     })
     if (!res.ok) { toast({ title: 'Update failed', variant: 'destructive' }); return }
     toast({ title: user.is_active ? 'User deactivated' : 'User activated' })
+    load()
+  }
+
+  async function handleDelete(user: Profile) {
+    if (!confirm(`Permanently delete ${user.full_name || user.email}? This cannot be undone.`)) return
+    const res = await fetch('/api/admin/users', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: user.id }),
+    })
+    const data = await res.json()
+    if (!res.ok) { toast({ title: 'Delete failed', description: data.error, variant: 'destructive' }); return }
+    toast({ title: 'User deleted' })
     load()
   }
 
@@ -134,6 +147,9 @@ export default function AdminUsersPage() {
                   </Link>
                   <button onClick={() => toggleActive(user)} className={`text-sm p-1 rounded transition-colors ${user.is_active ? 'text-green-500 hover:text-red-400' : 'text-gray-300 hover:text-green-500'}`}>
                     {user.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
+                  </button>
+                  <button onClick={() => handleDelete(user)} className="text-sm p-1 rounded text-gray-300 hover:text-red-500 transition-colors" title="Delete user">
+                    <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
               </div>

@@ -22,14 +22,20 @@ export async function GET(
   const { data: sheet } = await admin.from('sell_sheets').select('*').eq('id', id).single()
   if (!sheet) return NextResponse.json({ error: 'Sheet not found' }, { status: 404 })
 
-  // Get all salespeople who have access to this sheet
+  if (!sheet.contact_box) {
+    return NextResponse.json({
+      error: 'No contact region defined. Go to Edit Sheet, drag a box over the contact area, then click Save Changes first.'
+    }, { status: 400 })
+  }
+
+  // Get all salespeople with access
   const { data: accessRows } = await admin
     .from('sell_sheet_access')
     .select('user_id')
     .eq('sell_sheet_id', id)
 
   if (!accessRows || accessRows.length === 0) {
-    return NextResponse.json({ error: 'No salespeople have access to this sheet yet' }, { status: 400 })
+    return NextResponse.json({ error: 'No salespeople have access to this sheet yet.' }, { status: 400 })
   }
 
   const userIds = accessRows.map((r: { user_id: string }) => r.user_id)
@@ -41,43 +47,39 @@ export async function GET(
     .eq('is_active', true)
 
   if (!salespeople || salespeople.length === 0) {
-    return NextResponse.json({ error: 'No active salespeople found' }, { status: 400 })
+    return NextResponse.json({ error: 'No active salespeople found.' }, { status: 400 })
   }
 
   // Download the original PDF once
   const { data: fileData } = await admin.storage.from('sell-sheets').download(sheet.pdf_url)
-  if (!fileData) return NextResponse.json({ error: 'Failed to load PDF' }, { status: 500 })
+  if (!fileData) return NextResponse.json({ error: 'Failed to load PDF from storage.' }, { status: 500 })
 
-  const originalPdfBytes = await fileData.arrayBuffer()
+  const originalBytes = await fileData.arrayBuffer()
 
-  // Build ZIP
+  // Build ZIP — each person gets a fresh copy of the bytes to avoid buffer sharing
   const zip = new JSZip()
   const sheetSlug = sheet.title.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_')
 
-  await Promise.all(
-    salespeople.map(async (person: { full_name: string; email: string; phone: string | null; title: string | null }) => {
-      let pdfBytes: Uint8Array
+  // Process sequentially to avoid ArrayBuffer contention
+  for (const person of salespeople as Array<{ full_name: string; email: string; phone: string | null; title: string | null }>) {
+    // Slice a fresh copy for each person
+    const freshCopy = originalBytes.slice(0)
+    const pdfBytes = await injectContactInfo(freshCopy, person, sheet.contact_box)
 
-      if (sheet.contact_box) {
-        pdfBytes = await injectContactInfo(originalPdfBytes, person, sheet.contact_box)
-      } else {
-        pdfBytes = new Uint8Array(originalPdfBytes)
-      }
+    const personSlug = (person.full_name || person.email)
+      .replace(/[^a-z0-9]/gi, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
 
-      const personSlug = (person.full_name || person.email)
-        .replace(/[^a-z0-9]/gi, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '')
-
-      const filename = `${sheetSlug}_-_${personSlug}.pdf`
-      zip.file(filename, pdfBytes)
-    })
-  )
+    const filename = `${sheetSlug}_-_${personSlug}.pdf`
+    zip.file(filename, pdfBytes)
+  }
 
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   const zipName = `${sheetSlug}_-_All_Salespeople.zip`
+  const body = zipBuffer.buffer.slice(zipBuffer.byteOffset, zipBuffer.byteOffset + zipBuffer.byteLength) as ArrayBuffer
 
-  return new NextResponse(zipBuffer.buffer.slice(zipBuffer.byteOffset, zipBuffer.byteOffset + zipBuffer.byteLength) as ArrayBuffer, {
+  return new NextResponse(body, {
     headers: {
       'Content-Type': 'application/zip',
       'Content-Disposition': `attachment; filename="${zipName}"`,

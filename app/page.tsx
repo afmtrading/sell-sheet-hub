@@ -2,106 +2,135 @@ import Link from 'next/link'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Navbar } from '@/components/layout/navbar'
-import { SheetCard } from '@/components/sheets/sheet-card'
-import { Badge } from '@/components/ui/badge'
-import { ArrowRight, Tag } from 'lucide-react'
-import type { SellSheetWithCategories, Profile } from '@/types/database'
+import { FileText } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
+import type { SellSheetWithCategories, Profile, Category } from '@/types/database'
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ category?: string }>
+}) {
+  const { category: selectedSlug } = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   const admin = createAdminClient()
 
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single()
-
+  const { data: profile } = await admin.from('profiles').select('*').eq('id', user.id).single()
   const isAdmin = profile?.role === 'admin'
 
-  // Fetch sheets using admin client — access filter done in code, not RLS
+  // Fetch all categories for sidebar
+  const { data: categories } = await admin.from('categories').select('*').order('name')
+
+  // Determine which sheet IDs this user can see
+  let allowedIds: string[] | null = null
+  if (!isAdmin) {
+    const { data: accessRows } = await admin
+      .from('sell_sheet_access')
+      .select('sell_sheet_id')
+      .eq('user_id', user.id)
+    allowedIds = (accessRows || []).map((a: { sell_sheet_id: string }) => a.sell_sheet_id)
+  }
+
+  // Fetch sheets — optionally filtered by category
   let sheetsRaw: unknown[] = []
 
-  if (isAdmin) {
+  if (selectedSlug && selectedSlug !== 'all') {
+    const { data: cat } = await admin.from('categories').select('id').eq('slug', selectedSlug).single()
+    if (cat) {
+      const { data: links } = await admin
+        .from('sell_sheet_categories')
+        .select('sell_sheets(*, sell_sheet_categories(category_id, categories(*)))')
+        .eq('category_id', cat.id)
+      sheetsRaw = (links || [])
+        .map((r: Record<string, unknown>) => r.sell_sheets)
+        .filter(Boolean)
+    }
+  } else {
     const { data } = await admin
       .from('sell_sheets')
       .select('*, sell_sheet_categories(category_id, categories(*))')
       .eq('is_active', true)
       .order('created_at', { ascending: false })
-      .limit(8)
     sheetsRaw = data || []
-  } else {
-    const { data: accessRows } = await admin
-      .from('sell_sheet_access')
-      .select('sell_sheet_id')
-      .eq('user_id', user.id)
-    const ids = (accessRows || []).map((a: { sell_sheet_id: string }) => a.sell_sheet_id)
-
-    if (ids.length > 0) {
-      const { data } = await admin
-        .from('sell_sheets')
-        .select('*, sell_sheet_categories(category_id, categories(*))')
-        .eq('is_active', true)
-        .in('id', ids)
-        .order('created_at', { ascending: false })
-        .limit(8)
-      sheetsRaw = data || []
-    }
   }
 
-  const sheets: SellSheetWithCategories[] = sheetsRaw.map((s: unknown) => {
-    const row = s as Record<string, unknown>
-    return {
-      ...(row as unknown as SellSheetWithCategories),
-      categories: ((row.sell_sheet_categories as Array<{ categories: unknown }>) || [])
-        .map((sc) => sc.categories)
-        .filter(Boolean) as SellSheetWithCategories['categories'],
-    }
-  })
+  let sheets: SellSheetWithCategories[] = sheetsRaw
+    .filter((s: unknown) => (s as Record<string, unknown>)?.is_active !== false)
+    .map((s: unknown) => {
+      const row = s as Record<string, unknown>
+      return {
+        ...(row as unknown as SellSheetWithCategories),
+        categories: ((row.sell_sheet_categories as Array<{ categories: unknown }>) || [])
+          .map(sc => sc.categories).filter(Boolean) as SellSheetWithCategories['categories'],
+      }
+    })
 
-  const { data: categories } = await admin.from('categories').select('*').order('name')
+  // Filter by access for salespeople
+  if (!isAdmin && allowedIds !== null) {
+    const idSet = new Set(allowedIds)
+    sheets = sheets.filter(s => idSet.has(s.id))
+  }
+
+  const activeSlug = selectedSlug || 'all'
 
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar profile={profile as Profile} />
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-8">
-        <div className="bg-gradient-to-r from-[#0B1F3A] to-[#1E5A96] rounded-2xl p-8 mb-8 text-white">
-          <h1 className="text-2xl font-bold mb-1">Welcome back, {profile?.full_name?.split(' ')[0] || 'there'}</h1>
-          <p className="text-white/70 text-sm">Browse and share your sell sheets below.</p>
-        </div>
+      <div className="flex flex-1">
+        {/* Left sidebar — categories */}
+        <aside className="w-52 shrink-0 border-r bg-white">
+          <nav className="p-3 space-y-0.5 sticky top-14">
+            <p className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Categories</p>
 
-        {(categories || []).length > 0 && (
-          <section className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Tag className="h-4 w-4 text-[#1E5A96]" />
-                Categories
-              </h2>
-              <Link href="/categories" className="text-sm text-[#1E5A96] hover:underline flex items-center gap-1">
-                View all <ArrowRight className="h-3.5 w-3.5" />
+            {/* ALL */}
+            <Link
+              href="/"
+              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                activeSlug === 'all'
+                  ? 'bg-[#1E5A96] text-white font-medium'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              All Sell Sheets
+            </Link>
+
+            {(categories || []).map((cat: Category) => (
+              <Link
+                key={cat.id}
+                href={`/?category=${cat.slug}`}
+                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                  activeSlug === cat.slug
+                    ? 'bg-[#1E5A96] text-white font-medium'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {cat.name}
               </Link>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(categories || []).map(cat => (
-                <Link key={cat.id} href={`/categories/${cat.slug}`}>
-                  <Badge variant="outline" className="text-sm py-1.5 px-3 cursor-pointer hover:bg-[#1E5A96] hover:text-white hover:border-[#1E5A96] transition-colors">
-                    {cat.name}
-                  </Badge>
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
+            ))}
+          </nav>
+        </aside>
 
-        <section>
-          <h2 className="font-semibold text-gray-900 mb-4">Recent Sell Sheets</h2>
+        {/* Main content */}
+        <main className="flex-1 min-w-0 p-6">
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <h1 className="text-lg font-bold text-gray-900">
+                {activeSlug === 'all'
+                  ? 'All Sell Sheets'
+                  : (categories || []).find((c: Category) => c.slug === activeSlug)?.name || 'Sell Sheets'}
+              </h1>
+              <p className="text-sm text-gray-400">{sheets.length} sheet{sheets.length !== 1 ? 's' : ''}</p>
+            </div>
+          </div>
+
           {sheets.length === 0 ? (
-            <div className="text-center py-16 text-gray-400">
-              <p className="text-lg">No sell sheets available yet.</p>
+            <div className="text-center py-20 text-gray-400">
+              <FileText className="h-12 w-12 mx-auto mb-3 text-gray-200" />
+              <p>No sell sheets here yet.</p>
               {isAdmin && (
                 <Link href="/admin/sheets/new" className="text-[#1E5A96] hover:underline text-sm mt-2 inline-block">
                   Upload your first sell sheet →
@@ -109,14 +138,72 @@ export default async function HomePage() {
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {sheets.map(sheet => (
-                <SheetCard key={sheet.id} sheet={sheet} />
-              ))}
+            <div className="border rounded-xl overflow-hidden bg-white">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-medium text-gray-500 w-16">Preview</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-500">Title</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-500 hidden md:table-cell">Categories</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-500 hidden lg:table-cell">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {sheets.map(sheet => (
+                    <Link key={sheet.id} href={`/sheets/${sheet.id}`} legacyBehavior>
+                      <tr
+                        key={sheet.id}
+                        className="hover:bg-gray-50 cursor-pointer transition-colors"
+                        onClick={() => { window.location.href = `/sheets/${sheet.id}` }}
+                      >
+                        {/* Thumbnail */}
+                        <td className="px-4 py-2">
+                          {sheet.thumbnail_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={sheet.thumbnail_url}
+                              alt={sheet.title}
+                              className="h-12 w-10 object-cover rounded border"
+                            />
+                          ) : (
+                            <div className="h-12 w-10 bg-gray-100 rounded border flex items-center justify-center">
+                              <FileText className="h-5 w-5 text-gray-300" />
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Title */}
+                        <td className="px-4 py-2">
+                          <p className="font-medium text-gray-900 hover:text-[#1E5A96]">{sheet.title}</p>
+                          {sheet.description && (
+                            <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{sheet.description}</p>
+                          )}
+                        </td>
+
+                        {/* Categories */}
+                        <td className="px-4 py-2 hidden md:table-cell">
+                          <div className="flex flex-wrap gap-1">
+                            {sheet.categories.slice(0, 3).map(cat => (
+                              <span key={cat.id} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs border text-gray-600">
+                                {cat.name}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+
+                        {/* Date */}
+                        <td className="px-4 py-2 text-gray-400 hidden lg:table-cell text-xs">
+                          {formatDate(sheet.created_at)}
+                        </td>
+                      </tr>
+                    </Link>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
-        </section>
-      </main>
+        </main>
+      </div>
     </div>
   )
 }
